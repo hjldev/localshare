@@ -18,7 +18,9 @@ use axum::{
 use chrono::{DateTime, Local};
 use mime_guess::from_path;
 use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tokio::{fs::File, io::AsyncReadExt};
 use tower_http::cors::{Any, CorsLayer};
 use tauri_plugin_dialog::DialogExt;
@@ -34,6 +36,13 @@ struct AppState {
 
 static GLOBAL_STATE: Lazy<Arc<Mutex<ServerInfo>>> =
     Lazy::new(|| Arc::new(Mutex::new(ServerInfo::default())));
+static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        // 局域网访问禁止走环境代理（如 ALL_PROXY），避免本地地址请求失败
+        .no_proxy()
+        .build()
+        .expect("failed to build reqwest client")
+});
 
 #[derive(Default, Clone, Serialize)]
 struct ServerInfo {
@@ -113,7 +122,13 @@ fn file_icon(ext: &str, is_dir: bool) -> &'static str {
 }
 
 fn get_local_ip() -> String {
-    // 通过连接外部地址来确定本机 IP
+    // 优先使用本地网卡枚举，离线场景也能拿到局域网地址
+    if let Ok(ip) = local_ip_address::local_ip() {
+        if !ip.is_loopback() {
+            return ip.to_string();
+        }
+    }
+    // 兜底：通过连接外部地址来推断本机 IP
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
@@ -158,6 +173,10 @@ fn list_dir(root: &Path, rel: &str) -> Result<DirListing> {
             Err(_) => continue,
         };
         let name = entry.file_name().to_string_lossy().to_string();
+        // 过滤系统隐藏文件，避免出现 .localized 这类无意义条目
+        if name.starts_with('.') {
+            continue;
+        }
         let is_dir = meta.is_dir();
         let size = if is_dir { 0 } else { meta.len() };
         let ext = if is_dir {
@@ -358,10 +377,14 @@ async fn start_server(root_dir: String, port: u16) -> Result<ServerStatus, Strin
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| format!("端口 {} 监听失败: {}", port, e))?;
 
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        axum::serve(listener, app).await.unwrap();
+        if let Err(e) = axum::serve(listener, app).await {
+            eprintln!("axum serve exited: {}", e);
+        }
     });
 
     // 更新全局状态
@@ -419,7 +442,11 @@ async fn download_and_open(url: String, file_name: String) -> Result<String, Str
     let dest = tmp_dir.join(format!("{}_{}", ts, safe_name));
 
     // 下载
-    let resp = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let resp = HTTP_CLIENT
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("下载失败: HTTP {}", resp.status()));
     }
@@ -429,6 +456,58 @@ async fn download_and_open(url: String, file_name: String) -> Result<String, Str
     // 用系统应用打开
     open::that(&dest).map_err(|e| format!("打开失败: {}", e))?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// 下载文件到本机 Downloads 目录
+#[tauri::command]
+async fn download_file(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+) -> Result<String, String> {
+    let dl_dir = app
+        .path()
+        .download_dir()
+        .map_err(|e| format!("获取下载目录失败: {}", e))?;
+    std::fs::create_dir_all(&dl_dir).map_err(|e| e.to_string())?;
+
+    let safe_name = file_name.replace(['/', '\\'], "_");
+    let mut target = dl_dir.join(&safe_name);
+    if target.exists() {
+        let stem = std::path::Path::new(&safe_name)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let ext = std::path::Path::new(&safe_name)
+            .extension()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        for i in 1..=9999 {
+            let name = if ext.is_empty() {
+                format!("{} ({})", stem, i)
+            } else {
+                format!("{} ({}).{}", stem, i, ext)
+            };
+            let candidate = dl_dir.join(name);
+            if !candidate.exists() {
+                target = candidate;
+                break;
+            }
+        }
+    }
+
+    let resp = HTTP_CLIENT
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败: HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
 }
 
 /// 扫描局域网发现主机（简单端口扫描）
@@ -447,8 +526,8 @@ async fn discover_hosts(port: u16) -> Vec<HashMap<String, String>> {
         let url = format!("http://{}:{}/api/info", ip, port);
         handles.push(tokio::spawn(async move {
             match tokio::time::timeout(
-                Duration::from_millis(300),
-                reqwest::get(&url),
+                Duration::from_millis(700),
+                HTTP_CLIENT.get(&url).send(),
             )
             .await
             {
@@ -513,6 +592,7 @@ pub fn run() {
             get_server_status,
             open_file_with_system,
             download_and_open,
+            download_file,
             discover_hosts,
             get_my_ip,
             pick_directory,

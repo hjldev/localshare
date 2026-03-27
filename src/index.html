@@ -655,22 +655,47 @@ window.stopServer = () => {
 
 // ── Client mode ───────────────────────────────────────────────────────────────
 function startScan() {
-  if (scanTimer) return;
+  if (scanTimer) {
+    clearTimeout(scanTimer);
+    scanTimer = null;
+  }
   document.getElementById('scanMsg').style.display = 'flex';
   document.getElementById('hostGrid').innerHTML = `<div class="center-msg" id="scanMsg"><div class="spinner"></div><div>正在扫描局域网…</div></div>`;
   setStatus('scanning', '扫描中…');
   scanTimer = setTimeout(async () => {
     try {
       const port = PORT();
+      let localIp = '';
+      try {
+        localIp = await invoke('get_my_ip');
+      } catch {}
+      toast(`扫描网段：${localIp || 'unknown'}:*:${port}`);
+
       const hosts = await invoke('discover_hosts', { port });
-      renderHostList(hosts, port);
+
+      // 如果当前应用本机服务已启动，强制补一张本机卡片，避免扫描偶发漏检
+      let mergedHosts = [...hosts];
+      try {
+        const status = await invoke('get_server_status');
+        if (status?.running && status?.ip && status?.port) {
+          const exists = mergedHosts.some(h => h.ip === status.ip);
+          if (!exists) {
+            mergedHosts.unshift({ ip: status.ip, port: status.port, name: '本机（当前应用）' });
+          }
+        }
+      } catch {}
+
+      renderHostList(mergedHosts, port);
+      toast(`扫描完成：发现 ${mergedHosts.length} 台主机`, mergedHosts.length ? 'success' : '');
     } catch (e) {
       renderHostList([], PORT());
+      toast(`扫描失败：${e}`, 'error');
     }
     scanTimer = null;
     setStatus('', '未连接');
   }, 100);
 }
+window.startScan = startScan;
 
 function renderHostList(hosts, port) {
   const grid = document.getElementById('hostGrid');
@@ -684,11 +709,11 @@ function renderHostList(hosts, port) {
     return;
   }
   grid.innerHTML = hosts.map(h => `
-    <div class="host-card" data-ip="${h.ip}" data-port="${port}" data-name="${encodeURIComponent(h.name || h.ip)}">
+    <div class="host-card" data-ip="${h.ip}" data-port="${h.port || port}" data-name="${encodeURIComponent(h.name || h.ip)}">
       <div class="host-avatar">🖥</div>
       <div>
         <div class="host-name">${h.name}</div>
-        <div class="host-ip">${h.ip}:${port}</div>
+        <div class="host-ip">${h.ip}:${h.port || port}</div>
       </div>
       <div class="host-arrow">›</div>
     </div>`).join('');
@@ -785,7 +810,7 @@ function renderFiles(entries, path) {
         ${canOpen
           ? `<span class="open-btn" onclick="openFile('${safePath}','${safeName}')">▶ 本机打开</span>`
           : `<span class="dl-btn" title="该类型仅支持下载">仅下载</span>`}
-        <a class="dl-btn" href="${dlUrl}" download="${e.name}">⬇</a>
+        <span class="dl-btn" onclick="downloadFile('${safePath}','${safeName}')">⬇</span>
       </div>
     </div>`;
   }).join('');
@@ -807,6 +832,20 @@ window.openFile = async (filePath, fileName) => {
   } catch (e) {
     hideProgress();
     toast(`打开失败：${e}`, 'error');
+  }
+};
+
+window.downloadFile = async (filePath, fileName) => {
+  const url = `http://${currentHost.ip}:${currentHost.port}/api/download?path=${encodeURIComponent(filePath)}`;
+  showProgress('正在下载到下载目录…', fileName, 20);
+  try {
+    const localPath = await invoke('download_file', { url, fileName });
+    showProgress('下载完成', fileName, 100);
+    setTimeout(() => hideProgress(), 600);
+    toast(`已下载到：${localPath}`, 'success');
+  } catch (e) {
+    hideProgress();
+    toast(`下载失败：${e}`, 'error');
   }
 };
 
