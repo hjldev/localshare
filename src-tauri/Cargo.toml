@@ -1,0 +1,47 @@
+[package]
+name = "localshare"
+version = "0.1.0"
+description = "LocalShare - 局域网文件直连工具"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "localshare_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "localshare"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["multipart"] }
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+axum-extra = { version = "0.9" }
+local-ip-address = "0.6"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2"
+mime_guess = "2"
+open = "5"
+anyhow = "1"
+once_cell = "1"
+socket2 = "0.5"
+hostname = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalShare</title>
+<script type="module">
+  import { invoke } from 'https://unpkg.com/@tauri-apps/api@2/core';
+  window.__invoke = invoke;
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #0c0e14;
+  --surface: #13161f;
+  --surface2: #1a1e2e;
+  --surface3: #212638;
+  --border: #252d47;
+  --border2: #303858;
+  --accent: #5b8dee;
+  --accent2: #8b72f0;
+  --accent-glow: rgba(91,141,238,.18);
+  --text: #dde4f0;
+  --text2: #9aaac8;
+  --muted: #5a6a8a;
+  --success: #3ecf88;
+  --warn: #f5a623;
+  --danger: #f06565;
+  --radius: 12px;
+  --font: 'Noto Sans SC', sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── titlebar ── */
+.titlebar {
+  height: 42px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 12px;
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+.logo-dot {
+  width: 26px; height: 26px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+}
+.tb-spacer { flex: 1; }
+.status-pill {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px 3px 8px;
+  font-size: 12px;
+  color: var(--text2);
+  -webkit-app-region: no-drag;
+}
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background .3s;
+}
+.status-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.status-dot.scanning { background: var(--warn); animation: pulse 1s infinite; }
+
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+
+/* ── layout ── */
+.app {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── sidebar ── */
+.sidebar {
+  width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text2);
+  font-size: 13px;
+  transition: all .15s;
+  border: 1px solid transparent;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active {
+  background: var(--accent-glow);
+  border-color: rgba(91,141,238,.3);
+  color: var(--accent);
+  font-weight: 500;
+}
+.nav-icon { font-size: 15px; }
+.sidebar-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.sidebar-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  padding: 4px 10px 2px;
+  font-weight: 500;
+}
+
+/* ── main content ── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+.page.active { display: flex; }
+
+/* ── host page ── */
+.host-setup {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 40px;
+}
+.setup-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 36px 40px;
+  width: 100%;
+  max-width: 500px;
+}
+.setup-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.setup-sub { color: var(--text2); font-size: 13px; margin-bottom: 28px; line-height: 1.5; }
+.form-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+.form-group { margin-bottom: 18px; }
+.input-row { display: flex; gap: 8px; }
+.inp {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 9px;
+  padding: 9px 13px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  outline: none;
+  transition: border-color .2s;
+}
+.inp:focus { border-color: var(--accent); }
+.inp::placeholder { color: var(--muted); }
+.inp.mono { font-family: var(--mono); font-size: 13px; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 9px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--border2); background: var(--surface3); }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+.btn.primary:hover { opacity: .88; }
+.btn.success {
+  background: rgba(62,207,136,.15);
+  border-color: rgba(62,207,136,.4);
+  color: var(--success);
+}
+.btn.danger {
+  background: rgba(240,101,101,.1);
+  border-color: rgba(240,101,101,.3);
+  color: var(--danger);
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.full { width: 100%; }
+
+/* ── server running card ── */
+.server-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 32px;
+  width: 100%; max-width: 500px;
+}
+.server-running-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: rgba(62,207,136,.1);
+  border: 1px solid rgba(62,207,136,.3);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--success);
+  margin-bottom: 20px;
+}
+.addr-block {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.addr-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+.addr-value {
+  font-family: var(--mono);
+  font-size: 18px;
+  color: var(--accent);
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.addr-hint { font-size: 12px; color: var(--text2); }
+.dir-info {
+  font-size: 12px; color: var(--text2);
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 20px;
+}
+
+/* ── client page ── */
+.client-top {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.breadcrumb {
+  display: flex; align-items: center; gap: 4px;
+  flex: 1; overflow: hidden;
+  font-size: 13px; color: var(--text2);
+}
+.breadcrumb .crumb {
+  cursor: pointer; color: var(--accent);
+  transition: opacity .15s;
+}
+.breadcrumb .crumb:hover { opacity: .75; }
+.breadcrumb .sep { color: var(--border2); }
+.breadcrumb .cur { color: var(--text); }
+.client-toolbar { display: flex; gap: 8px; align-items: center; }
+
+/* ── host list ── */
+.host-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  gap: 16px;
+}
+.host-grid { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 480px; }
+.host-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 14px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.host-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.host-avatar {
+  width: 42px; height: 42px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+.host-name { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.host-ip { font-family: var(--mono); font-size: 12px; color: var(--text2); }
+.host-arrow { margin-left: auto; color: var(--muted); font-size: 18px; }
+.connect-manual {
+  width: 100%; max-width: 480px;
+  display: flex; gap: 8px;
+}
+
+/* ── file list ── */
+.file-area { flex: 1; overflow-y: auto; }
+.fl-header {
+  display: grid;
+  grid-template-columns: 1fr 110px 130px 130px;
+  padding: 8px 20px;
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .7px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 10;
+}
+.fi {
+  display: grid;
+  grid-template-columns: 1fr 110px 130px 130px;
+  align-items: center;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--border);
+  transition: background .12s;
+  cursor: pointer;
+}
+.fi:hover { background: var(--surface2); }
+.fi:last-child { border-bottom: none; }
+.fn { display: flex; align-items: center; gap: 9px; overflow: hidden; }
+.ficon { font-size: 18px; flex-shrink: 0; }
+.fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.fsize { color: var(--text2); font-size: 12px; font-family: var(--mono); }
+.fdate { color: var(--text2); font-size: 12px; }
+.faction { display: flex; gap: 6px; align-items: center; }
+.open-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  border: 1px solid rgba(91,141,238,.4);
+  background: rgba(91,141,238,.1);
+  color: var(--accent);
+  cursor: pointer;
+  transition: all .15s;
+}
+.open-btn:hover { background: rgba(91,141,238,.2); }
+.dl-btn {
+  display: inline-flex; align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text2);
+  cursor: pointer;
+  transition: all .15s;
+}
+.dl-btn:hover { color: var(--text); border-color: var(--border2); }
+
+/* ── loading / empty ── */
+.center-msg {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px; color: var(--text2); padding: 40px;
+}
+.spinner {
+  width: 28px; height: 28px;
+  border: 2px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── toast ── */
+.toast {
+  position: fixed; bottom: 20px; right: 20px;
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 12px 18px;
+  font-size: 13px;
+  z-index: 9999;
+  display: none;
+  animation: fadeIn .2s ease;
+  max-width: 320px;
+}
+.toast.show { display: flex; gap: 8px; align-items: center; }
+.toast.success { border-color: rgba(62,207,136,.4); color: var(--success); }
+.toast.error { border-color: rgba(240,101,101,.3); color: var(--danger); }
+@keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+/* ── progress ── */
+.progress-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  display: none; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.progress-overlay.show { display: flex; }
+.progress-card {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 14px;
+  padding: 28px 36px;
+  text-align: center;
+  min-width: 300px;
+}
+.progress-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.progress-sub { font-size: 12px; color: var(--text2); margin-bottom: 18px; }
+.progress-bar-wrap { background: var(--surface2); border-radius: 999px; height: 6px; overflow: hidden; }
+.progress-bar { height: 100%; background: var(--accent); border-radius: 999px; width: 0; transition: width .3s; }
+
+/* manual connect row */
+.manual-row {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 8px;
+  flex-shrink: 0;
+  background: var(--surface);
+}
+</style>
+</head>
+<body>
+
+<!-- Titlebar -->
+<div class="titlebar">
+  <div class="logo">
+    <div class="logo-dot">🔗</div>
+    LocalShare
+  </div>
+  <div class="tb-spacer"></div>
+  <div class="status-pill" id="statusPill">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">未连接</span>
+  </div>
+</div>
+
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-label">角色</div>
+    <div class="nav-item active" onclick="switchPage('host')" id="nav-host">
+      <span class="nav-icon">🖥</span> 主机模式
+    </div>
+    <div class="nav-item" onclick="switchPage('client')" id="nav-client">
+      <span class="nav-icon">💻</span> 客户端
+    </div>
+    <div class="sidebar-sep"></div>
+    <div class="sidebar-label">信息</div>
+    <div class="nav-item" id="nav-myip" style="cursor:default;font-size:11px;color:var(--muted);padding:6px 10px;">
+      <span class="nav-icon">📡</span>
+      <span id="myIpText">获取中…</span>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- ── 主机页 ── -->
+    <div class="page active" id="page-host">
+      <div class="host-setup" id="hostSetup">
+        <div class="setup-card">
+          <div class="setup-title">🖥 启动文件共享</div>
+          <div class="setup-sub">选择要共享的文件夹，局域网内其他设备即可浏览并直接打开 Word、Excel、PPT、PDF 等办公文件。</div>
+
+          <div class="form-group">
+            <div class="form-label">共享目录</div>
+            <div class="input-row">
+              <input class="inp mono" id="rootDir" placeholder="点击右侧选择文件夹…" readonly>
+              <button class="btn" type="button" id="pickDirBtn">📂 选择</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label">端口号</div>
+            <input class="inp mono" id="portInput" value="8899" style="width:120px">
+          </div>
+
+          <button class="btn primary full" onclick="startServer()" id="startBtn">
+            🚀 启动共享服务
+          </button>
+        </div>
+      </div>
+
+      <div class="host-setup" id="serverRunning" style="display:none">
+        <div class="server-card">
+          <div class="server-running-badge">
+            <div class="status-dot online"></div> 服务运行中
+          </div>
+          <div class="addr-block">
+            <div class="addr-label">局域网访问地址</div>
+            <div class="addr-value" id="serverAddr">—</div>
+            <div class="addr-hint">将此地址发给同事，或让他们在客户端模式中自动发现</div>
+          </div>
+          <div class="dir-info">
+            📁 <span id="serverDir">—</span>
+          </div>
+          <button class="btn danger full" onclick="stopServer()">⏹ 停止共享</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 客户端页 ── -->
+    <div class="page" id="page-client">
+
+      <!-- 未连接：显示主机列表 -->
+      <div class="host-list" id="hostList">
+        <div style="text-align:center;margin-bottom:8px;">
+          <div style="font-size:18px;font-weight:600;margin-bottom:6px;">💻 连接主机</div>
+          <div style="color:var(--text2);font-size:13px;">自动扫描局域网，或手动输入地址</div>
+        </div>
+
+        <div class="host-grid" id="hostGrid">
+          <div class="center-msg" id="scanMsg">
+            <div class="spinner"></div>
+            <div>正在扫描局域网…</div>
+          </div>
+        </div>
+
+        <div class="connect-manual">
+          <input class="inp mono" id="manualIp" placeholder="手动输入 IP，如 192.168.1.5">
+          <input class="inp mono" id="manualPort" value="8899" style="width:90px">
+          <button class="btn primary" onclick="connectManual()">连接</button>
+        </div>
+      </div>
+
+      <!-- 已连接：文件浏览器 -->
+      <div style="display:none;flex-direction:column;flex:1;overflow:hidden;" id="fileBrowser">
+        <div class="client-top">
+          <div class="breadcrumb" id="breadcrumb">
+            <span class="crumb" onclick="navTo('/')">🏠 根目录</span>
+          </div>
+          <div class="client-toolbar">
+            <button class="btn" onclick="refreshDir()">↺ 刷新</button>
+            <button class="btn danger" onclick="disconnect()">断开</button>
+          </div>
+        </div>
+
+        <div class="fl-header">
+          <div>名称</div><div>大小</div><div>修改时间</div><div>操作</div>
+        </div>
+
+        <div class="file-area" id="fileArea">
+          <div class="center-msg"><div class="spinner"></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Progress overlay -->
+<div class="progress-overlay" id="progressOverlay">
+  <div class="progress-card">
+    <div class="progress-title" id="progressTitle">正在下载…</div>
+    <div class="progress-sub" id="progressSub">请稍候</div>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { invoke } from 'https://unpkg.com/@tauri-apps/api@2/core';
+
+// ── State ────────────────────────────────────────────────────────────────────
+let currentHost = null;  // { ip, port, name }
+let currentPath = '/';
+let scanTimer = null;
+const PORT = () => parseInt(document.getElementById('manualPort').value) || 8899;
+const OFFICE_EXTS = new Set(['doc','docx','xls','xlsx','ppt','pptx','pdf','txt','csv','rtf','odt','ods','odp']);
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  const pickBtn = document.getElementById('pickDirBtn');
+  if (pickBtn) {
+    // 显式事件绑定，避免首击被内联事件/焦点切换吞掉
+    pickBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.pickDir();
+    });
+  }
+  try {
+    const ip = await invoke('get_my_ip');
+    document.getElementById('myIpText').textContent = ip;
+  } catch {}
+});
+
+// ── Page switch ───────────────────────────────────────────────────────────────
+window.switchPage = (name) => {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item[id^=nav-]').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.getElementById('nav-' + name).classList.add('active');
+  if (name === 'client' && !currentHost) startScan();
+};
+
+// ── Host mode ─────────────────────────────────────────────────────────────────
+window.pickDir = async () => {
+  try {
+    const dir = await invoke('pick_directory');
+    if (dir) document.getElementById('rootDir').value = dir;
+  } catch (e) { toast('选择目录失败: ' + e, 'error'); }
+};
+
+window.startServer = async () => {
+  const dir = document.getElementById('rootDir').value.trim();
+  const port = parseInt(document.getElementById('portInput').value) || 8899;
+  if (!dir) { toast('请先选择共享目录', 'error'); return; }
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true; btn.textContent = '启动中…';
+  try {
+    const res = await invoke('start_server', { rootDir: dir, port });
+    document.getElementById('serverAddr').textContent = `http://${res.ip}:${res.port}`;
+    document.getElementById('serverDir').textContent = res.root_dir;
+    document.getElementById('hostSetup').style.display = 'none';
+    document.getElementById('serverRunning').style.display = 'flex';
+    setStatus('online', `服务中 :${res.port}`);
+    toast('服务已启动！', 'success');
+  } catch (e) {
+    toast('启动失败: ' + e, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '🚀 启动共享服务';
+  }
+};
+
+window.stopServer = () => {
+  // 简单重置 UI（Tauri 不支持动态停止 axum，需重启进程才能真正停止）
+  document.getElementById('hostSetup').style.display = 'flex';
+  document.getElementById('serverRunning').style.display = 'none';
+  setStatus('', '未连接');
+  toast('已停止共享（重启应用生效）');
+};
+
+// ── Client mode ───────────────────────────────────────────────────────────────
+function startScan() {
+  if (scanTimer) return;
+  document.getElementById('scanMsg').style.display = 'flex';
+  document.getElementById('hostGrid').innerHTML = `<div class="center-msg" id="scanMsg"><div class="spinner"></div><div>正在扫描局域网…</div></div>`;
+  setStatus('scanning', '扫描中…');
+  scanTimer = setTimeout(async () => {
+    try {
+      const port = PORT();
+      const hosts = await invoke('discover_hosts', { port });
+      renderHostList(hosts, port);
+    } catch (e) {
+      renderHostList([], PORT());
+    }
+    scanTimer = null;
+    setStatus('', '未连接');
+  }, 100);
+}
+
+function renderHostList(hosts, port) {
+  const grid = document.getElementById('hostGrid');
+  if (hosts.length === 0) {
+    grid.innerHTML = `<div class="center-msg">
+      <div style="font-size:32px">😶</div>
+      <div>未发现局域网主机</div>
+      <div style="font-size:12px;color:var(--muted)">请确保主机已开启共享，或手动输入 IP</div>
+      <button class="btn" onclick="startScan()">重新扫描</button>
+    </div>`;
+    return;
+  }
+  grid.innerHTML = hosts.map(h => `
+    <div class="host-card" data-ip="${h.ip}" data-port="${port}" data-name="${encodeURIComponent(h.name || h.ip)}">
+      <div class="host-avatar">🖥</div>
+      <div>
+        <div class="host-name">${h.name}</div>
+        <div class="host-ip">${h.ip}:${port}</div>
+      </div>
+      <div class="host-arrow">›</div>
+    </div>`).join('');
+  grid.querySelectorAll('.host-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const ip = card.dataset.ip;
+      const cport = parseInt(card.dataset.port || `${port}`) || port;
+      const name = decodeURIComponent(card.dataset.name || ip);
+      connectTo(ip, cport, name);
+    });
+  });
+}
+
+window.connectManual = () => {
+  const ip = document.getElementById('manualIp').value.trim();
+  const port = PORT();
+  if (!ip) { toast('请输入 IP 地址', 'error'); return; }
+  connectTo(ip, port, ip);
+};
+
+async function connectTo(ip, port, name) {
+  try {
+    const res = await fetch(`http://${ip}:${port}/api/info`);
+    if (!res.ok) throw new Error('无法连接');
+    const info = await res.json();
+    currentHost = { ip, port, name: info.name || name };
+    currentPath = '/';
+    setStatus('online', `已连接 ${ip}`);
+    document.getElementById('hostList').style.display = 'none';
+    const fb = document.getElementById('fileBrowser');
+    fb.style.display = 'flex';
+    loadDir('/');
+  } catch (e) {
+    toast('连接失败: ' + e.message, 'error');
+  }
+}
+
+window.disconnect = () => {
+  currentHost = null;
+  currentPath = '/';
+  document.getElementById('hostList').style.display = 'flex';
+  document.getElementById('fileBrowser').style.display = 'none';
+  setStatus('', '未连接');
+  startScan();
+};
+
+window.refreshDir = () => loadDir(currentPath);
+window.navTo = (path) => loadDir(path);
+
+async function loadDir(path) {
+  currentPath = path;
+  updateBreadcrumb(path);
+  const area = document.getElementById('fileArea');
+  area.innerHTML = '<div class="center-msg"><div class="spinner"></div></div>';
+  try {
+    const url = `http://${currentHost.ip}:${currentHost.port}/api/list?path=${encodeURIComponent(path)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    renderFiles(data.entries, path);
+  } catch (e) {
+    area.innerHTML = `<div class="center-msg"><div>加载失败: ${e.message}</div><button class="btn" onclick="refreshDir()">重试</button></div>`;
+  }
+}
+
+function renderFiles(entries, path) {
+  const area = document.getElementById('fileArea');
+  if (!entries || entries.length === 0) {
+    area.innerHTML = '<div class="center-msg">📭 空目录</div>';
+    return;
+  }
+
+  const parentRow = path !== '/' ? `
+    <div class="fi" onclick="navTo('${getParent(path)}')">
+      <div class="fn"><span class="ficon">⬆️</span><span class="fname">返回上级</span></div>
+      <div class="fsize">—</div><div class="fdate">—</div><div></div>
+    </div>` : '';
+
+  const rows = entries.map(e => {
+    const safeName = e.name.replace(/'/g, "\\'");
+    const safePath = e.path.replace(/'/g, "\\'");
+    if (e.is_dir) {
+      return `<div class="fi" onclick="navTo('${safePath}')">
+        <div class="fn"><span class="ficon">${e.icon}</span><span class="fname">${e.name}</span></div>
+        <div class="fsize">—</div><div class="fdate">${e.modified}</div><div></div>
+      </div>`;
+    }
+    const dlUrl = `http://${currentHost.ip}:${currentHost.port}/api/download?path=${encodeURIComponent(e.path)}`;
+    const canOpen = OFFICE_EXTS.has((e.ext || '').toLowerCase());
+    return `<div class="fi">
+      <div class="fn"><span class="ficon">${e.icon}</span><span class="fname" title="${e.name}">${e.name}</span></div>
+      <div class="fsize">${e.size_human}</div>
+      <div class="fdate">${e.modified}</div>
+      <div class="faction">
+        ${canOpen
+          ? `<span class="open-btn" onclick="openFile('${safePath}','${safeName}')">▶ 本机打开</span>`
+          : `<span class="dl-btn" title="该类型仅支持下载">仅下载</span>`}
+        <a class="dl-btn" href="${dlUrl}" download="${e.name}">⬇</a>
+      </div>
+    </div>`;
+  }).join('');
+
+  area.innerHTML = parentRow + rows;
+}
+
+window.openFile = async (filePath, fileName) => {
+  const url = `http://${currentHost.ip}:${currentHost.port}/api/download?path=${encodeURIComponent(filePath)}`;
+  showProgress('正在获取文件…', fileName, 20);
+  try {
+    const result = await invoke('download_and_open', {
+      url,
+      fileName,
+    });
+    showProgress('正在打开…', fileName, 80);
+    setTimeout(() => hideProgress(), 800);
+    toast(`✅ 已用本地应用打开：${fileName}`, 'success');
+  } catch (e) {
+    hideProgress();
+    toast(`打开失败：${e}`, 'error');
+  }
+};
+
+// ── Breadcrumb ────────────────────────────────────────────────────────────────
+function updateBreadcrumb(path) {
+  const bc = document.getElementById('breadcrumb');
+  const parts = path.split('/').filter(Boolean);
+  let html = `<span class="crumb" onclick="navTo('/')">🏠 根目录</span>`;
+  let cum = '';
+  parts.forEach((p, i) => {
+    cum += '/' + p;
+    const c = cum;
+    html += `<span class="sep"> / </span>`;
+    if (i === parts.length - 1) html += `<span class="cur">${p}</span>`;
+    else html += `<span class="crumb" onclick="navTo('${c}')">${p}</span>`;
+  });
+  bc.innerHTML = html;
+}
+
+function getParent(path) {
+  const parts = path.split('/').filter(Boolean);
+  parts.pop();
+  return '/' + parts.join('/');
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function setStatus(type, text) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  dot.className = 'status-dot' + (type ? ' ' + type : '');
+  txt.textContent = text;
+}
+
+let toastTimer;
+window.toast = (msg, type = '') => {
+  const el = document.getElementById('toast');
+  el.className = 'toast show' + (type ? ' ' + type : '');
+  el.textContent = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+};
+
+function showProgress(title, sub, pct) {
+  document.getElementById('progressTitle').textContent = title;
+  document.getElementById('progressSub').textContent = sub;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressOverlay').classList.add('show');
+}
+function hideProgress() {
+  document.getElementById('progressOverlay').classList.remove('show');
+}
+</script>
+</body>
+</html>
