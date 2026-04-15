@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    hash::{Hash, Hasher},
     net::{SocketAddr, UdpSocket},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -81,6 +82,13 @@ struct ApiInfo {
     version: String,
     host: String,
     root: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CachedOpenMeta {
+    source_key: String,
+    modified_ts: u64,
+    file_name: String,
 }
 
 const SHARED_BROWSER_JS: &str = include_str!("../../src/shared-file-browser.js");
@@ -559,6 +567,20 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
+fn temp_open_dir() -> PathBuf {
+    std::env::temp_dir().join("localshare_open")
+}
+
+fn cache_file_stem(source_key: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source_key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn safe_file_name(name: &str) -> String {
+    name.replace(['/', '\\'], "_")
+}
+
 // ─── Tauri 命令 ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -663,18 +685,30 @@ async fn open_with_system(target: String) -> Result<(), String> {
 
 /// 下载文件到本地临时目录并打开
 #[tauri::command]
-async fn download_and_open(url: String, file_name: String) -> Result<String, String> {
-    // 临时目录
-    let tmp_dir = std::env::temp_dir().join("localshare_open");
+async fn download_and_open(
+    url: String,
+    file_name: String,
+    source_key: String,
+    modified_ts: u64,
+) -> Result<String, String> {
+    let tmp_dir = temp_open_dir();
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_millis();
-    let safe_name = file_name.replace(['/', '\\'], "_");
-    let dest = tmp_dir.join(format!("{}_{}", ts, safe_name));
+    let safe_name = safe_file_name(&file_name);
+    let stem = cache_file_stem(&source_key);
+    let dest = tmp_dir.join(format!("{}_{}", stem, safe_name));
+    let meta_path = tmp_dir.join(format!("{}.json", stem));
 
-    // 下载
+    if dest.exists() && meta_path.exists() {
+        if let Ok(meta_text) = std::fs::read_to_string(&meta_path) {
+            if let Ok(meta) = serde_json::from_str::<CachedOpenMeta>(&meta_text) {
+                if meta.source_key == source_key && meta.modified_ts == modified_ts {
+                    open::that(&dest).map_err(|e| format!("打开失败: {}", e))?;
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
     let resp = HTTP_CLIENT
         .get(&url)
         .send()
@@ -685,8 +719,14 @@ async fn download_and_open(url: String, file_name: String) -> Result<String, Str
     }
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
     std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+    let meta = CachedOpenMeta {
+        source_key,
+        modified_ts,
+        file_name,
+    };
+    let meta_text = serde_json::to_string(&meta).map_err(|e| e.to_string())?;
+    std::fs::write(&meta_path, meta_text).map_err(|e| e.to_string())?;
 
-    // 用系统应用打开
     open::that(&dest).map_err(|e| format!("打开失败: {}", e))?;
     Ok(dest.to_string_lossy().to_string())
 }

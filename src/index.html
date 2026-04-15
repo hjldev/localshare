@@ -925,7 +925,7 @@ function getClientItemActions(entry) {
     actions.push({
       label: '本机打开',
       kind: 'secondary',
-      onClick: () => openFile(entry.path, entry.name),
+      onClick: () => openFile(entry),
     });
   }
 
@@ -938,17 +938,22 @@ function getClientItemActions(entry) {
   return actions;
 }
 
-window.openFile = async (filePath, fileName) => {
+window.openFile = async (entry) => {
+  const filePath = entry.path;
+  const fileName = entry.name;
   const url = `http://${currentHost.ip}:${currentHost.port}/api/download?path=${encodeURIComponent(filePath)}`;
+  const sourceKey = `${currentHost.ip}:${currentHost.port}${filePath}`;
   showProgress('正在获取文件…', fileName, 20);
   try {
-    const result = await invoke('download_and_open', {
+    const localPath = await invoke('download_and_open', {
       url,
       fileName,
+      sourceKey,
+      modifiedTs: entry.modified_ts || 0,
     });
     showProgress('正在打开…', fileName, 80);
     setTimeout(() => hideProgress(), 800);
-    toast(`✅ 已用本地应用打开：${fileName}`, 'success');
+    toast(`已用本地应用打开：${localPath}`, 'success');
   } catch (e) {
     hideProgress();
     toast(`打开失败：${e}`, 'error');
