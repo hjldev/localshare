@@ -440,6 +440,96 @@ body {
   flex-shrink: 0;
   background: var(--surface);
 }
+
+/* ── preview overlay ─────────────────────────────────────────────────────── */
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 10, 18, .82);
+  backdrop-filter: blur(10px);
+  z-index: 1100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+}
+.preview-overlay.show { display: flex; }
+.preview-shell {
+  width: min(1100px, 100%);
+  height: min(86vh, 840px);
+  background: rgba(19, 22, 31, .96);
+  border: 1px solid var(--border2);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  display: flex;
+  flex-direction: column;
+}
+.preview-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(26, 30, 46, .92);
+}
+.preview-meta { min-width: 0; flex: 1; }
+.preview-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text2);
+}
+.preview-close {
+  min-width: 0;
+  padding: 8px 12px;
+}
+.preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(45deg, rgba(255,255,255,.02) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,.02) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,.02) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.02) 75%);
+  background-size: 28px 28px;
+  background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+}
+.preview-media {
+  max-width: 100%;
+  max-height: 100%;
+  display: none;
+}
+.preview-media.show { display: block; }
+.preview-video {
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+.preview-image {
+  object-fit: contain;
+}
+.preview-empty {
+  color: var(--text2);
+  font-size: 14px;
+}
+@media (max-width: 760px) {
+  .preview-overlay { padding: 10px; }
+  .preview-shell { height: min(92vh, 920px); }
+  .preview-top {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+}
 </style>
 </head>
 <body>
@@ -566,6 +656,24 @@ body {
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<!-- Preview overlay -->
+<div class="preview-overlay" id="previewOverlay">
+  <div class="preview-shell">
+    <div class="preview-top">
+      <div class="preview-meta">
+        <div class="preview-title" id="previewTitle">预览</div>
+        <div class="preview-sub" id="previewSub">应用内打开</div>
+      </div>
+      <button class="btn preview-close" type="button" id="previewCloseBtn">关闭</button>
+    </div>
+    <div class="preview-body" id="previewBody">
+      <video class="preview-media preview-video" id="previewVideo" controls playsinline></video>
+      <img class="preview-media preview-image" id="previewImage" alt="">
+      <div class="preview-empty" id="previewEmpty">当前没有可预览内容</div>
+    </div>
+  </div>
+</div>
+
 <script type="module">
 import { invoke } from 'https://unpkg.com/@tauri-apps/api@2/core';
 import { createSharedFileBrowser } from './shared-file-browser.js';
@@ -575,6 +683,7 @@ let currentHost = null;  // { ip, port, name }
 let currentPath = '/';
 let scanTimer = null;
 let sharedBrowser = null;
+let previewState = { kind: null, url: '', name: '' };
 const PORT = () => parseInt(document.getElementById('manualPort').value) || 8899;
 const OFFICE_EXTS = new Set(['doc','docx','xls','xlsx','ppt','pptx','pdf','txt','csv','rtf','odt','ods','odp']);
 const INLINE_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v']);
@@ -604,6 +713,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     const ip = await invoke('get_my_ip');
     document.getElementById('myIpText').textContent = ip;
   } catch {}
+
+  document.getElementById('previewCloseBtn').addEventListener('click', () => closePreview());
+  document.getElementById('previewOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'previewOverlay') closePreview();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePreview();
+  });
 });
 
 // ── Page switch ───────────────────────────────────────────────────────────────
@@ -751,6 +868,7 @@ async function connectTo(ip, port, name) {
 }
 
 window.disconnect = () => {
+  closePreview();
   currentHost = null;
   currentPath = '/';
   document.getElementById('hostList').style.display = 'flex';
@@ -789,7 +907,7 @@ function getClientItemActions(entry) {
 
   if (INLINE_VIDEO_EXTS.has(ext)) {
     actions.push({
-      label: '直接播放',
+      label: '应用内播放',
       kind: 'secondary',
       onClick: () => playVideo(entry.path, entry.name),
     });
@@ -797,7 +915,7 @@ function getClientItemActions(entry) {
 
   if (INLINE_IMAGE_EXTS.has(ext)) {
     actions.push({
-      label: '直接查看',
+      label: '应用内查看',
       kind: 'secondary',
       onClick: () => viewImage(entry.path, entry.name),
     });
@@ -839,22 +957,12 @@ window.openFile = async (filePath, fileName) => {
 
 window.playVideo = async (filePath, fileName) => {
   const url = `http://${currentHost.ip}:${currentHost.port}/api/view?path=${encodeURIComponent(filePath)}`;
-  try {
-    await invoke('open_with_system', { target: url });
-    toast(`已在系统浏览器中打开：${fileName}`, 'success');
-  } catch (e) {
-    toast(`播放失败：${e}`, 'error');
-  }
+  openPreview('video', url, fileName);
 };
 
 window.viewImage = async (filePath, fileName) => {
   const url = `http://${currentHost.ip}:${currentHost.port}/api/view?path=${encodeURIComponent(filePath)}`;
-  try {
-    await invoke('open_with_system', { target: url });
-    toast(`已在系统浏览器中查看：${fileName}`, 'success');
-  } catch (e) {
-    toast(`查看失败：${e}`, 'error');
-  }
+  openPreview('image', url, fileName);
 };
 
 window.downloadFile = async (filePath, fileName) => {
@@ -896,6 +1004,59 @@ function showProgress(title, sub, pct) {
 }
 function hideProgress() {
   document.getElementById('progressOverlay').classList.remove('show');
+}
+
+function openPreview(kind, url, name) {
+  const overlay = document.getElementById('previewOverlay');
+  const title = document.getElementById('previewTitle');
+  const sub = document.getElementById('previewSub');
+  const empty = document.getElementById('previewEmpty');
+  const video = document.getElementById('previewVideo');
+  const image = document.getElementById('previewImage');
+
+  previewState = { kind, url, name };
+  title.textContent = name;
+  sub.textContent = kind === 'video' ? '应用内视频播放' : '应用内图片查看';
+  empty.style.display = 'none';
+  video.classList.remove('show');
+  image.classList.remove('show');
+
+  if (kind === 'video') {
+    image.removeAttribute('src');
+    video.src = url;
+    video.classList.add('show');
+    overlay.classList.add('show');
+    const onCanPlay = () => {
+      video.play().catch(() => {});
+      video.removeEventListener('canplay', onCanPlay);
+    };
+    video.addEventListener('canplay', onCanPlay);
+    video.load();
+  } else if (kind === 'image') {
+    video.pause();
+    video.removeAttribute('src');
+    image.alt = name;
+    image.src = url;
+    image.classList.add('show');
+    overlay.classList.add('show');
+  }
+}
+
+function closePreview() {
+  const overlay = document.getElementById('previewOverlay');
+  const video = document.getElementById('previewVideo');
+  const image = document.getElementById('previewImage');
+  if (!overlay.classList.contains('show')) return;
+
+  overlay.classList.remove('show');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  image.removeAttribute('src');
+  image.alt = '';
+  video.classList.remove('show');
+  image.classList.remove('show');
+  previewState = { kind: null, url: '', name: '' };
 }
 </script>
 </body>
