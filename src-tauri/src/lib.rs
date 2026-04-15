@@ -8,9 +8,11 @@ use std::{
 
 use anyhow::Result;
 use axum::{
+    body::Body,
+    extract::Request,
     extract::{Query, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{Html, IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -21,7 +23,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tokio::{fs::File, io::AsyncReadExt};
+use tower::ServiceExt;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeFile;
 use tauri_plugin_dialog::DialogExt;
 
 // ─── 全局状态 ────────────────────────────────────────────────────────────────
@@ -78,6 +82,179 @@ struct ApiInfo {
     host: String,
     root: String,
 }
+
+const SHARED_BROWSER_JS: &str = include_str!("../../src/shared-file-browser.js");
+const SHARED_BROWSER_CSS: &str = include_str!("../../src/shared-file-browser.css");
+const WEB_INDEX_HTML: &str = r#"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LocalShare Web</title>
+  <link rel="stylesheet" href="/assets/shared-file-browser.css" />
+  <style>
+    :root {
+      --lsb-accent: #c5622d;
+      --lsb-accent-soft: rgba(197, 98, 45, 0.1);
+      --lsb-text: #1e1d1a;
+      --lsb-muted: #6c675d;
+      --lsb-line: rgba(77, 64, 45, 0.14);
+      --lsb-line-strong: rgba(77, 64, 45, 0.22);
+      --lsb-panel: #fffdf7;
+      --lsb-toolbar-bg: rgba(255, 255, 255, 0.5);
+      --lsb-surface2: #f7f1e6;
+      --lsb-icon-bg: linear-gradient(135deg, rgba(197, 98, 45, 0.12), rgba(44, 115, 98, 0.12));
+      --lsb-danger: #b94a34;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--lsb-text);
+      background:
+        radial-gradient(circle at top left, rgba(197, 98, 45, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(44, 115, 98, 0.15), transparent 24%),
+        linear-gradient(180deg, #f7f2e8 0%, #efe6d4 100%);
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .shell {
+      max-width: 980px;
+      margin: 0 auto;
+      background: rgba(255, 251, 243, 0.92);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      border-radius: 28px;
+      box-shadow: 0 18px 40px rgba(84, 57, 26, 0.12);
+      overflow: hidden;
+    }
+
+    .hero {
+      padding: 28px 28px 18px;
+      background: linear-gradient(135deg, rgba(197, 98, 45, 0.08), rgba(44, 115, 98, 0.08));
+      border-bottom: 1px solid var(--lsb-line);
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--lsb-accent);
+      background: var(--lsb-accent-soft);
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 5vw, 42px);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .sub {
+      margin: 10px 0 0;
+      color: var(--lsb-muted);
+      max-width: 680px;
+      line-height: 1.6;
+    }
+
+    .browser-wrap {
+      height: min(72vh, 920px);
+      min-height: 420px;
+    }
+
+    @media (max-width: 760px) {
+      body { padding: 14px; }
+      .hero { padding-left: 18px; padding-right: 18px; }
+      .browser-wrap { height: auto; min-height: calc(100vh - 220px); }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">LocalShare Web</div>
+      <h1>局域网文件浏览</h1>
+      <p class="sub">浏览器可直接访问共享目录，支持进入子目录、在线播放视频和下载文件。这个文件浏览区与桌面客户端共用同一套界面逻辑。</p>
+    </section>
+    <section id="browser" class="browser-wrap"></section>
+  </main>
+
+  <script type="module">
+    import { createSharedFileBrowser } from "/assets/shared-file-browser.js";
+
+    const INLINE_VIDEO_EXTS = new Set(["mp4", "webm", "mov", "m4v"]);
+    const browser = createSharedFileBrowser({
+      mount: document.getElementById("browser"),
+      onNavigate: (path) => load(path, true),
+      getTopActions: () => [
+        { label: "刷新", onClick: () => load(currentPath, false) },
+      ],
+      getItemActions: (entry) => {
+        if (entry.is_dir) return [];
+        const actions = [];
+        if (INLINE_VIDEO_EXTS.has((entry.ext || "").toLowerCase())) {
+          actions.push({
+            label: "直接播放",
+            kind: "secondary",
+            href: `/api/view?path=${encodeURIComponent(entry.path)}`,
+            targetBlank: true,
+          });
+        }
+        actions.push({
+          label: "下载文件",
+          kind: "primary",
+          href: `/api/download?path=${encodeURIComponent(entry.path)}`,
+        });
+        return actions;
+      },
+    });
+
+    let currentPath = "/";
+
+    async function load(path, pushHistory) {
+      currentPath = path || new URLSearchParams(window.location.search).get("path") || "/";
+      if (pushHistory) {
+        const url = new URL(window.location.href);
+        if (currentPath !== "/") url.searchParams.set("path", currentPath);
+        else url.searchParams.delete("path");
+        history.pushState({ path: currentPath }, "", url);
+      } else {
+        const url = new URL(window.location.href);
+        if (currentPath !== "/") url.searchParams.set("path", currentPath);
+        else url.searchParams.delete("path");
+        history.replaceState({ path: currentPath }, "", url);
+      }
+
+      browser.setLoading("正在加载目录...");
+      try {
+        const resp = await fetch(`/api/list?path=${encodeURIComponent(currentPath)}`);
+        if (!resp.ok) {
+          throw new Error(await resp.text() || `HTTP ${resp.status}`);
+        }
+        const listing = await resp.json();
+        browser.setData({
+          path: listing.path,
+          entries: listing.entries,
+          statusText: `${listing.entries.length} 个项目`,
+        });
+      } catch (err) {
+        browser.setError(String(err.message || err));
+      }
+    }
+
+    window.addEventListener("popstate", (event) => {
+      load(event.state?.path || "/", false);
+    });
+
+    load(null, false);
+  </script>
+</body>
+</html>
+"#;
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
@@ -245,6 +422,24 @@ async fn api_info(State(state): State<AppState>) -> Json<ApiInfo> {
     })
 }
 
+async fn web_index() -> Html<&'static str> {
+    Html(WEB_INDEX_HTML)
+}
+
+async fn shared_browser_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        SHARED_BROWSER_JS,
+    )
+}
+
+async fn shared_browser_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        SHARED_BROWSER_CSS,
+    )
+}
+
 #[derive(Deserialize)]
 struct PathQuery {
     path: Option<String>,
@@ -254,42 +449,48 @@ async fn api_list(
     State(state): State<AppState>,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<DirListing>, (StatusCode, String)> {
-    let root = state
-        .root_dir
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "未选择共享目录".into()))?;
+    let root = shared_root(&state)?;
 
     let rel = q.path.unwrap_or_default();
     list_dir(&root, &rel).map(Json).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
-async fn api_download(
-    State(state): State<AppState>,
-    Query(q): Query<PathQuery>,
-) -> Result<Response, (StatusCode, String)> {
-    let root = state
+fn shared_root(state: &AppState) -> Result<PathBuf, (StatusCode, String)> {
+    state
         .root_dir
         .lock()
         .unwrap()
         .clone()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "未选择共享目录".into()))?;
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "未选择共享目录".into()))
+}
 
-    let rel = q.path.ok_or((StatusCode::BAD_REQUEST, "缺少 path 参数".into()))?;
+fn resolve_shared_file(root: &Path, rel: &str) -> Result<PathBuf, (StatusCode, String)> {
     let full = root.join(rel.trim_start_matches('/'));
     let full = full
         .canonicalize()
         .map_err(|_| (StatusCode::NOT_FOUND, "文件不存在".into()))?;
 
-    // 安全检查
-    let root_canon = root.canonicalize().unwrap();
+    let root_canon = root
+        .canonicalize()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if !full.starts_with(&root_canon) {
         return Err((StatusCode::FORBIDDEN, "禁止访问".into()));
     }
     if !full.is_file() {
         return Err((StatusCode::BAD_REQUEST, "不是文件".into()));
     }
+
+    Ok(full)
+}
+
+async fn api_download(
+    State(state): State<AppState>,
+    Query(q): Query<PathQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let root = shared_root(&state)?;
+
+    let rel = q.path.ok_or((StatusCode::BAD_REQUEST, "缺少 path 参数".into()))?;
+    let full = resolve_shared_file(&root, &rel)?;
 
     let file_name = full.file_name().unwrap().to_string_lossy().to_string();
     let mime = from_path(&full).first_or_octet_stream();
@@ -318,6 +519,23 @@ async fn api_download(
         buf,
     )
         .into_response())
+}
+
+async fn api_view(
+    State(state): State<AppState>,
+    Query(q): Query<PathQuery>,
+    req: Request,
+) -> Result<Response, (StatusCode, String)> {
+    let root = shared_root(&state)?;
+    let rel = q.path.ok_or((StatusCode::BAD_REQUEST, "缺少 path 参数".into()))?;
+    let full = resolve_shared_file(&root, &rel)?;
+
+    let response = ServeFile::new(full)
+        .oneshot(req.map(|_| Body::empty()))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(response.map(Body::new))
 }
 
 fn urlencoding_encode(s: &str) -> String {
@@ -367,8 +585,12 @@ async fn start_server(root_dir: String, port: u16) -> Result<ServerStatus, Strin
         .allow_headers(Any);
 
     let app = Router::new()
+        .route("/", get(web_index))
+        .route("/assets/shared-file-browser.js", get(shared_browser_js))
+        .route("/assets/shared-file-browser.css", get(shared_browser_css))
         .route("/api/info", get(api_info))
         .route("/api/list", get(api_list))
+        .route("/api/view", get(api_view))
         .route("/api/download", get(api_download))
         .layer(cors)
         .with_state(state);
@@ -423,6 +645,11 @@ async fn open_file_with_system(file_path: String) -> Result<(), String> {
         return Err(format!("文件不存在: {}", file_path));
     }
     open::that(&path).map_err(|e| format!("打开失败: {}", e))
+}
+
+#[tauri::command]
+async fn open_with_system(target: String) -> Result<(), String> {
+    open::that(target).map_err(|e| format!("打开失败: {}", e))
 }
 
 /// 下载文件到本地临时目录并打开
@@ -588,6 +815,7 @@ pub fn run() {
             start_server,
             get_server_status,
             open_file_with_system,
+            open_with_system,
             download_and_open,
             download_file,
             discover_hosts,

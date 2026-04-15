@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LocalShare</title>
+<link rel="stylesheet" href="./shared-file-browser.css">
 <script type="module">
   import { invoke } from 'https://unpkg.com/@tauri-apps/api@2/core';
   window.__invoke = invoke;
@@ -546,23 +547,7 @@ body {
 
       <!-- 已连接：文件浏览器 -->
       <div style="display:none;flex-direction:column;flex:1;overflow:hidden;" id="fileBrowser">
-        <div class="client-top">
-          <div class="breadcrumb" id="breadcrumb">
-            <span class="crumb" onclick="navTo('/')">🏠 根目录</span>
-          </div>
-          <div class="client-toolbar">
-            <button class="btn" onclick="refreshDir()">↺ 刷新</button>
-            <button class="btn danger" onclick="disconnect()">断开</button>
-          </div>
-        </div>
-
-        <div class="fl-header">
-          <div>名称</div><div>大小</div><div>修改时间</div><div>操作</div>
-        </div>
-
-        <div class="file-area" id="fileArea">
-          <div class="center-msg"><div class="spinner"></div></div>
-        </div>
+        <div class="file-area" id="fileArea"></div>
       </div>
     </div>
 
@@ -583,16 +568,29 @@ body {
 
 <script type="module">
 import { invoke } from 'https://unpkg.com/@tauri-apps/api@2/core';
+import { createSharedFileBrowser } from './shared-file-browser.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 let currentHost = null;  // { ip, port, name }
 let currentPath = '/';
 let scanTimer = null;
+let sharedBrowser = null;
 const PORT = () => parseInt(document.getElementById('manualPort').value) || 8899;
 const OFFICE_EXTS = new Set(['doc','docx','xls','xlsx','ppt','pptx','pdf','txt','csv','rtf','odt','ods','odp']);
+const INLINE_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v']);
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
+  sharedBrowser = createSharedFileBrowser({
+    mount: document.getElementById('fileArea'),
+    onNavigate: (path) => loadDir(path),
+    getTopActions: () => [
+      { label: '刷新', onClick: () => refreshDir() },
+      { label: '断开', kind: 'danger', onClick: () => disconnect() },
+    ],
+    getItemActions: (entry) => getClientItemActions(entry),
+  });
+
   const pickBtn = document.getElementById('pickDirBtn');
   if (pickBtn) {
     // 显式事件绑定，避免首击被内联事件/焦点切换吞掉
@@ -765,57 +763,52 @@ window.navTo = (path) => loadDir(path);
 
 async function loadDir(path) {
   currentPath = path;
-  updateBreadcrumb(path);
-  const area = document.getElementById('fileArea');
-  area.innerHTML = '<div class="center-msg"><div class="spinner"></div></div>';
+  sharedBrowser.setLoading('正在加载目录...');
   try {
     const url = `http://${currentHost.ip}:${currentHost.port}/api/list?path=${encodeURIComponent(path)}`;
     const res = await fetch(url);
     const data = await res.json();
-    renderFiles(data.entries, path);
+    sharedBrowser.setData({
+      path,
+      entries: data.entries,
+      statusText: `${data.entries.length} 个项目 · ${currentHost.name} (${currentHost.ip}:${currentHost.port})`,
+    });
   } catch (e) {
-    area.innerHTML = `<div class="center-msg"><div>加载失败: ${e.message}</div><button class="btn" onclick="refreshDir()">重试</button></div>`;
+    sharedBrowser.setError(`加载失败: ${e.message}`);
   }
 }
 
-function renderFiles(entries, path) {
-  const area = document.getElementById('fileArea');
-  if (!entries || entries.length === 0) {
-    area.innerHTML = '<div class="center-msg">📭 空目录</div>';
-    return;
+function getClientItemActions(entry) {
+  if (entry.is_dir) {
+    return [];
   }
 
-  const parentRow = path !== '/' ? `
-    <div class="fi" onclick="navTo('${getParent(path)}')">
-      <div class="fn"><span class="ficon">⬆️</span><span class="fname">返回上级</span></div>
-      <div class="fsize">—</div><div class="fdate">—</div><div></div>
-    </div>` : '';
+  const ext = (entry.ext || '').toLowerCase();
+  const actions = [];
 
-  const rows = entries.map(e => {
-    const safeName = e.name.replace(/'/g, "\\'");
-    const safePath = e.path.replace(/'/g, "\\'");
-    if (e.is_dir) {
-      return `<div class="fi" onclick="navTo('${safePath}')">
-        <div class="fn"><span class="ficon">${e.icon}</span><span class="fname">${e.name}</span></div>
-        <div class="fsize">—</div><div class="fdate">${e.modified}</div><div></div>
-      </div>`;
-    }
-    const dlUrl = `http://${currentHost.ip}:${currentHost.port}/api/download?path=${encodeURIComponent(e.path)}`;
-    const canOpen = OFFICE_EXTS.has((e.ext || '').toLowerCase());
-    return `<div class="fi">
-      <div class="fn"><span class="ficon">${e.icon}</span><span class="fname" title="${e.name}">${e.name}</span></div>
-      <div class="fsize">${e.size_human}</div>
-      <div class="fdate">${e.modified}</div>
-      <div class="faction">
-        ${canOpen
-          ? `<span class="open-btn" onclick="openFile('${safePath}','${safeName}')">▶ 本机打开</span>`
-          : `<span class="dl-btn" title="该类型仅支持下载">仅下载</span>`}
-        <span class="dl-btn" onclick="downloadFile('${safePath}','${safeName}')">⬇</span>
-      </div>
-    </div>`;
-  }).join('');
+  if (INLINE_VIDEO_EXTS.has(ext)) {
+    actions.push({
+      label: '直接播放',
+      kind: 'secondary',
+      onClick: () => playVideo(entry.path, entry.name),
+    });
+  }
 
-  area.innerHTML = parentRow + rows;
+  if (OFFICE_EXTS.has(ext)) {
+    actions.push({
+      label: '本机打开',
+      kind: 'secondary',
+      onClick: () => openFile(entry.path, entry.name),
+    });
+  }
+
+  actions.push({
+    label: '下载文件',
+    kind: 'primary',
+    onClick: () => downloadFile(entry.path, entry.name),
+  });
+
+  return actions;
 }
 
 window.openFile = async (filePath, fileName) => {
@@ -835,6 +828,16 @@ window.openFile = async (filePath, fileName) => {
   }
 };
 
+window.playVideo = async (filePath, fileName) => {
+  const url = `http://${currentHost.ip}:${currentHost.port}/api/view?path=${encodeURIComponent(filePath)}`;
+  try {
+    await invoke('open_with_system', { target: url });
+    toast(`已在系统浏览器中打开：${fileName}`, 'success');
+  } catch (e) {
+    toast(`播放失败：${e}`, 'error');
+  }
+};
+
 window.downloadFile = async (filePath, fileName) => {
   const url = `http://${currentHost.ip}:${currentHost.port}/api/download?path=${encodeURIComponent(filePath)}`;
   showProgress('正在下载到下载目录…', fileName, 20);
@@ -848,28 +851,6 @@ window.downloadFile = async (filePath, fileName) => {
     toast(`下载失败：${e}`, 'error');
   }
 };
-
-// ── Breadcrumb ────────────────────────────────────────────────────────────────
-function updateBreadcrumb(path) {
-  const bc = document.getElementById('breadcrumb');
-  const parts = path.split('/').filter(Boolean);
-  let html = `<span class="crumb" onclick="navTo('/')">🏠 根目录</span>`;
-  let cum = '';
-  parts.forEach((p, i) => {
-    cum += '/' + p;
-    const c = cum;
-    html += `<span class="sep"> / </span>`;
-    if (i === parts.length - 1) html += `<span class="cur">${p}</span>`;
-    else html += `<span class="crumb" onclick="navTo('${c}')">${p}</span>`;
-  });
-  bc.innerHTML = html;
-}
-
-function getParent(path) {
-  const parts = path.split('/').filter(Boolean);
-  parts.pop();
-  return '/' + parts.join('/');
-}
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function setStatus(type, text) {
