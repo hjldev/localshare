@@ -187,6 +187,7 @@ const WEB_INDEX_HTML: &str = r#"<!DOCTYPE html>
     import { createSharedFileBrowser } from "/assets/shared-file-browser.js";
 
     const INLINE_VIDEO_EXTS = new Set(["mp4", "webm", "mov", "m4v"]);
+    const INLINE_IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif"]);
     const browser = createSharedFileBrowser({
       mount: document.getElementById("browser"),
       onNavigate: (path) => load(path, true),
@@ -199,6 +200,14 @@ const WEB_INDEX_HTML: &str = r#"<!DOCTYPE html>
         if (INLINE_VIDEO_EXTS.has((entry.ext || "").toLowerCase())) {
           actions.push({
             label: "直接播放",
+            kind: "secondary",
+            href: `/api/view?path=${encodeURIComponent(entry.path)}`,
+            targetBlank: true,
+          });
+        }
+        if (INLINE_IMAGE_EXTS.has((entry.ext || "").toLowerCase())) {
+          actions.push({
+            label: "直接查看",
             kind: "secondary",
             href: `/api/view?path=${encodeURIComponent(entry.path)}`,
             targetBlank: true,

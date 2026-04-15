@@ -578,6 +578,7 @@ let sharedBrowser = null;
 const PORT = () => parseInt(document.getElementById('manualPort').value) || 8899;
 const OFFICE_EXTS = new Set(['doc','docx','xls','xlsx','ppt','pptx','pdf','txt','csv','rtf','odt','ods','odp']);
 const INLINE_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v']);
+const INLINE_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif']);
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
@@ -794,6 +795,14 @@ function getClientItemActions(entry) {
     });
   }
 
+  if (INLINE_IMAGE_EXTS.has(ext)) {
+    actions.push({
+      label: '直接查看',
+      kind: 'secondary',
+      onClick: () => viewImage(entry.path, entry.name),
+    });
+  }
+
   if (OFFICE_EXTS.has(ext)) {
     actions.push({
       label: '本机打开',
@@ -835,6 +844,16 @@ window.playVideo = async (filePath, fileName) => {
     toast(`已在系统浏览器中打开：${fileName}`, 'success');
   } catch (e) {
     toast(`播放失败：${e}`, 'error');
+  }
+};
+
+window.viewImage = async (filePath, fileName) => {
+  const url = `http://${currentHost.ip}:${currentHost.port}/api/view?path=${encodeURIComponent(filePath)}`;
+  try {
+    await invoke('open_with_system', { target: url });
+    toast(`已在系统浏览器中查看：${fileName}`, 'success');
+  } catch (e) {
+    toast(`查看失败：${e}`, 'error');
   }
 };
 
