@@ -8,9 +8,8 @@ use std::{
 
 use anyhow::Result;
 use axum::{
-    body::Body,
     extract::{Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::get,
     Router,
@@ -31,7 +30,6 @@ use tauri_plugin_dialog::DialogExt;
 struct AppState {
     root_dir: Arc<Mutex<Option<PathBuf>>>,
     host_name: String,
-    server_port: u16,
 }
 
 static GLOBAL_STATE: Lazy<Arc<Mutex<ServerInfo>>> =
@@ -361,7 +359,6 @@ async fn start_server(root_dir: String, port: u16) -> Result<ServerStatus, Strin
     let state = AppState {
         root_dir: Arc::new(Mutex::new(Some(root.clone()))),
         host_name: host_name.clone(),
-        server_port: port,
     };
 
     let cors = CorsLayer::new()
